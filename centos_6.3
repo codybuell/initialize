@@ -19,6 +19,7 @@
 #            - create script to manage email accounts
 #            - configure this script to work with other distros
 #            - prompts to determine what to configure (apache, mail, both...)
+#            - yum removes? network manager? managers?
 
 ####################
 # Helper Functions #
@@ -66,6 +67,7 @@ checks root .
 DIR=`pwd`
 TEM="$DIR/templates/"
 IP=`ifconfig | grep 'inet addr:' | grep -v '127.0.0.1' | cut -d: -f2 | awk 'NR==1 {print $1}'`
+CONFIRMATION='no'
 
 # setup a decent environment
 export EDITOR='vi'
@@ -79,24 +81,48 @@ ADMIN='admin@example.com'
 PASSWD=''
 
 # prompts
-prompt "What username would you like?" USERNAME
-prompt "What is $USERNAME's uid and gid?" GUID
-prompt "What port would you like to use for ssh?" SSHPORT
-prompt "What is this systems short name?" HOSTNAME
-prompt "What is this systems domain name?" DOMAIN
-prompt "What is the server admins email?" ADMIN
-stty -echo
-prompt "Define a password for mysql mail_admin." PASSWD
-stty echo
+while [ $CONFIRMATION == "no" ]; do
+  clear
+  prompt "What username would you like?" USERNAME
+  prompt "What is $USERNAME's uid and gid?" GUID
+  prompt "What port would you like to use for ssh?" SSHPORT
+  prompt "What is this systems short name?" HOSTNAME
+  prompt "What is this systems domain name?" DOMAIN
+  prompt "What is the server admins email?" ADMIN
+  stty -echo
+  prompt "Define a password for mysql mail_admin." PASSWD
+  stty echo
+  echo ""
+  echo "                     Your Username: $USERNAME"
+  echo "              Your User & Group ID: $GUID"
+  echo "                          SSH Port: $SSHPORT"
+  echo "                   Host Short Name: $HOSTNAME"
+  echo "                            Domain: $DOMAIN"
+  echo "       Fully Qualified Domain Name: $HOSTNAME.$DOMAIN"
+  echo "        Server Administrator Email: $ADMIN"
+  if [ -z "$PASSWD" ]; then
+    echo " MySQL mail_admin Account Password: UNSET"
+  else
+    echo " MySQL mail_admin Account Password: *****"
+  fi
+  echo ""
+  echo "Is the above information correct?"
+  select yn in "Yes" "No"; do
+    case $yn in
+      Yes ) echo ""
+      echo "Are you sure you wish to proceed?"
+            select final in "Yes" "No"; do
+              case $final in
+                Yes ) CONFIRMATION="yes"; echo ""; break;;
+                No ) echo ""; exit 0; break;;
+              esac
+            done
+            break;;
+      No ) CONFIRMATION="no"; break;;
+    esac
+  done
+done
 
-##################
-# Check Settings #
-##################
-
-echo $USERNAME
-echo $GUID
-echo $SSHPORT
-echo $HOSTNAME
 
 ##########
 # Run It #
@@ -228,7 +254,7 @@ echo "Configuration is complete and the system needs to reboot."
 echo "Press any key to continue..."
 read -n 1
 init 6
-exit
+exit 0
 
 # AFTER REBOOT TASK LIST
 # setup mail users
