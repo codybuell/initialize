@@ -7,6 +7,8 @@
 # adapted for any CentOS 6.3 installation.  Built as fast, lightweight and
 # secure as possible.
 #
+#   - Creates mail server at mail.example.com
+#
 # Author(s): Cody Buell
 #
 # Revisions: 2012.10.20 Initial framework.
@@ -85,7 +87,7 @@ export EDITOR='vi'
 # establish defaults
 USERNAME='admin'              # administrators account with sudo
 GUID='615'                    # group and user id for admin
-SSHPORT='ssh'                 # port to allow ssh in on
+SSHPORT='22'                  # port to allow ssh in on
 DOMAIN='example.com'          # primary domain name
 ADMIN='admin@example.com'     # apache server admin email
 PASSWD=''                     # mysql mail_admin password
@@ -106,6 +108,7 @@ while [ $CONFIRM == "no" ]; do
   prompt "What is the server admins email?" ADMIN
   stty -echo
   prompt "Set a password for mysql mail_admin." PASSWD
+  echo ""
   prompt "Set a password for postmaster email." PMPWD
   stty echo
   echo ""
@@ -163,7 +166,7 @@ yum -y install man wget vim telnet crypto-utils mod_ssl tree bind-utils ntp http
 # setup hostname
 sed -i "s/\(^HOSTNAME=\).*/\1${HOSTNAME}/" /etc/sysconfig/network
 hostname $HOSTNAME
-echo -e "${ADDRESS}\t${HOSTNAME}.${DOMAIN} ${HOSTNAME}" >> /etc/hosts
+echo -e "${ADDRESS}\t${HOSTNAME}.${DOMAIN} mail.${DOMAIN} ${HOSTNAME}" >> /etc/hosts
 
 # setup user accounts
 useradd -u $GUID -d /home/$USERNAME/ -m -U -s /bin/bash $USERNAME
@@ -192,7 +195,9 @@ echo "PermitRootLogin no" >> /etc/ssh/sshd_config
 # configure iptables
 chkconfig iptables on
 installTemplate iptables /etc/sysconfig/iptables FULL
-sed -i "s/--dport ssh/--dport ${SSHPORT}/g" /etc/sysconfig/iptables
+if [ $SSHPORT != '22' ]; then
+  sed -i "s/--dport ssh/--dport ${SSHPORT}/g" /etc/sysconfig/iptables
+fi
 
 # enable selinux
 sed -i "s/\(SELINUX=\).*$/\1enforcing/" /etc/sysconfig/selinux
@@ -243,9 +248,11 @@ installTemplate mysql_virtual_forwardings.cf /etc/postfix/mysql_virtual_forwardi
 installTemplate mysql_virtual_mailboxes.cf /etc/postfix/mysql_virtual_mailboxes.cf
 installTemplate mysql_virtual_mailbox_limits.cf /etc/postfix/mysql_virtual_mailbox_limits.cf
 installTemplate mysql_virtual_transports.cf /etc/postfix/mysql_virtual_transports.cf
-sed -i "s/\(^myhostname = \).*$/\1${HOSTNAME}.${DOMAIN}/" /etc/postfix/main.cf
+#sed -i "s/\(^myhostname = \).*$/\1${HOSTNAME}.${DOMAIN}/" /etc/postfix/main.cf
+sed -i "s/\(^myhostname = \).*$/\1mail.${DOMAIN}/" /etc/postfix/main.cf
 sed -i "s/\(^mydomain = \).*$/\1${DOMAIN}/" /etc/postfix/main.cf
-sed -i "s/mail.example.com/${HOSTNAME}.${DOMAIN}/" /etc/postfix/main.cf
+#sed -i "s/mail.example.com/${HOSTNAME}.${DOMAIN}/" /etc/postfix/main.cf
+sed -i "s/mail.example.com/mail.${DOMAIN}/" /etc/postfix/main.cf
 sed -i "s/\(^password = \).*$/\1${PASSWD}/" /etc/postfix/mysql_virtual_domains.cf
 sed -i "s/\(^password = \).*$/\1${PASSWD}/" /etc/postfix/mysql_virtual_forwardings.cf
 sed -i "s/\(^password = \).*$/\1${PASSWD}/" /etc/postfix/mysql_virtual_mailboxes.cf
@@ -266,7 +273,8 @@ installTemplate 90-quota.conf /etc/dovecot/conf.d/90-quota.conf
 installTemplate auth-sql.conf.ext /etc/dovecot/conf.d/auth-sql.conf.ext
 installTemplate dovecot-dict-sql.conf.ext /etc/dovecot/dovecot-dict-sql.conf.ext
 installTemplate dovecot-sql.conf.ext /etc/dovecot/dovecot-sql.conf.ext
-sed -i "s/mail.example.com/${HOSTNAME}.${DOMAIN}/g" /etc/dovecot/conf.d/10-ssl.conf
+#sed -i "s/mail.example.com/${HOSTNAME}.${DOMAIN}/g" /etc/dovecot/conf.d/10-ssl.conf
+sed -i "s/mail.example.com/mail.${DOMAIN}/g" /etc/dovecot/conf.d/10-ssl.conf
 sed -i "s/\(password=\)password/\1${PASSWD}/" /etc/dovecot/dovecot-dict-sql.conf.ext
 sed -i "s/\(password=\)password/\1${PASSWD}/" /etc/dovecot/dovecot-sql.conf.ext
 
@@ -275,7 +283,8 @@ sed -i 's/^TCPSocket.*$/#&/' /etc/clamd.conf
 freshclam
 
 # configure amavisd-new
-sed -i "s/host.example.com/${HOSTNAME}.${DOMAIN}/g" /etc/amavisd.conf
+#sed -i "s/host.example.com/${HOSTNAME}.${DOMAIN}/g" /etc/amavisd.conf
+sed -i "s/host.example.com/mail.${DOMAIN}/g" /etc/amavisd.conf
 sed -i "s/example.com/${DOMAIN}/g" /etc/amavisd.conf
 sed -i "s/^# \(\$MYHOME = .*$\)/\1/" /etc/amavisd.conf
 sed -i "s/^# \(\$helpers_home = .*$\)/\1/" /etc/amavisd.conf
@@ -296,13 +305,15 @@ stty -echo
 CRAMPMPWD=`doveadm pw -p $PMPWD`
 stty echo
 QUERY1="USE mail;"
-QUERY2="INSERT INTO users VALUES ('postmaster@${DOMAIN}','${CRAMPMPWD}','524288000');"
-QUERY3="FLUSH PRIVILEGES;"
-SQL="${QUERY1}${QUERY2}${QUERY3}"
+QUERY2="INSERT INTO domains VALUES ('${DOMAIN}');"
+QUERY3="INSERT INTO users VALUES ('postmaster@${DOMAIN}','${CRAMPMPWD}','524288000');"
+QUERY4="FLUSH PRIVILEGES;"
+SQL="${QUERY1}${QUERY2}${QUERY3}${QUERY4}"
 mysql -u mail_admin -p$PASSWD -e "$SQL"
 
 # generate cert and key
-genkey --days 365 $HOSTNAME.$DOMAIN
+#genkey --days 365 $HOSTNAME.$DOMAIN
+genkey --days 365 mail.$DOMAIN
 
 # reboot the system
 echo "Configuration is complete and the system needs to reboot."
