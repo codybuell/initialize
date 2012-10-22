@@ -1,0 +1,138 @@
+######################
+# SERVER INFORMATION #
+######################
+
+# server hostname and domain
+myhostname = mail.example.com
+mydomain   = example.com
+
+#######################
+# POSTFIX ENVIRONMENT #
+#######################
+
+# apparent internally relayed mail source
+myorigin = $mydomain
+
+# networks that can relay mail without auth
+mynetworks = 127.0.0.0/8
+
+# process user and group
+mail_owner   = postfix
+setgid_group = postdrop
+
+# locally delivered domains
+mydestination = $myhostname, localhost, localhost.$mydomain
+
+# local delivery aliases
+alias_maps     = hash:/etc/aliases
+alias_database = hash:/etc/aliases
+
+# listen and recieve from
+inet_interfaces = all
+inet_protocols  = all
+
+# debug configuration
+debug_peer_level  = 2
+debugger_command  =
+	 PATH=/bin:/usr/bin:/usr/local/bin:/usr/X11R6/bin
+	 ddd $daemon_directory/$process_name $process_id & sleep 5
+
+# postfix envirnoment paths
+queue_directory   = /var/spool/postfix
+command_directory = /usr/sbin
+daemon_directory  = /usr/libexec/postfix
+data_directory    = /var/lib/postfix
+sendmail_path     = /usr/sbin/sendmail.postfix
+newaliases_path   = /usr/bin/newaliases.postfix
+mailq_path        = /usr/bin/mailq.postfix
+manpage_directory = /usr/share/man
+sample_directory  = /usr/share/doc/postfix-2.6.6/samples
+readme_directory  = /usr/share/doc/postfix-2.6.6/README_FILES
+html_directory    = no
+
+# bad address response
+unknown_local_recipient_reject_code = 550
+
+# specify which tables proxymap can read
+proxy_read_maps = $local_recipient_maps $mydestination $virtual_alias_maps
+  $virtual_alias_domains $virtual_mailbox_maps $virtual_mailbox_domains
+  $relay_recipient_maps $relay_domains $canonical_maps $sender_canonical_maps
+  $recipient_canonical_maps $relocated_maps $transport_maps $mynetworks
+  $virtual_mailbox_limit_maps
+
+#########################
+# VIRTUAL CONFIGURATION #
+#########################
+
+# virtual domains and accounts
+virtual_mailbox_domains = proxy:mysql:/etc/postfix/mysql_virtual_domains.cf
+virtual_mailbox_maps    = proxy:mysql:/etc/postfix/mysql_virtual_mailboxes.cf
+
+# forwardings
+virtual_alias_maps = proxy:mysql:/etc/postfix/mysql_virtual_forwardings.cf
+transport_maps     = proxy:mysql:/etc/postfix/mysql_virtual_transports.cf
+
+# virtual mail quotas
+virtual_create_maildirsize     = yes
+virtual_maildir_extended       = yes
+virtual_mailbox_limit_maps     = proxy:mysql:/etc/postfix/mysql_virtual_mailbox_limits.cf
+virtual_mailbox_limit_override = yes
+virtual_maildir_limit_message  = "The address you are trying to reach is over quota, please try again later."
+virtual_overquota_bounce       = yes
+
+# virtual mail owner
+virtual_uid_maps = static:5000
+virtual_gid_maps = static:5000
+
+######################
+# SMTP CONFIGURATION #
+######################
+
+# enable sasl auth
+smtpd_sasl_auth_enable = yes
+
+# define sasl agent
+smtpd_sasl_type = dovecot
+smtpd_sasl_path = private/auth
+
+# sasl security definitions
+smtpd_sasl_security_options  = noanonymous
+broken_sasl_auth_clients     = yes
+smtpd_recipient_restrictions = permit_sasl_authenticated, permit_mynetworks, reject_unauth_destination
+
+##########################
+# DELIVERY CONFIGURATION #
+##########################
+
+# use dovecot lda for delivery
+virtual_transport                   = dovecot
+dovecot_destination_recipient_limit = 1
+
+# use postfix to deliver specific domains
+virtual_alias_domains =
+virtual_mailbox_base  = /var/mail
+
+#####################
+# TLS CONFIGURATION #
+#####################
+
+# enable but do not require tls
+smtpd_tls_security_level = may
+
+# cert and key locations
+smtpd_tls_key_file  = /etc/pki/tls/private/mail.example.com.key
+smtpd_tls_cert_file = /etc/pki/tls/certs/mail.example.com.crt
+# smtpd_tls_CAfile  = /etc/pki/tls/root.crt
+
+# enable logging of tls session
+smtpd_tls_loglevel = 1
+
+# cache session for 1 hour to reduce load
+smtpd_tls_session_cache_timeout  = 3600s
+smtpd_tls_session_cache_database = btree:/var/spool/postfix/smtpd_tls_cache
+
+# define random data source
+tls_random_source = dev:/dev/urandom
+
+# require tls before allowing plain text auth
+smtpd_tls_auth_only = no

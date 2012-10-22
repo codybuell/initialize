@@ -1,0 +1,20 @@
+# This file is opened as root, so it should be owned by root and mode 0600.
+# An example can be found in /usr/share/doc/dovecot-2.0.9/example-config/
+#
+# http://wiki2.dovecot.org/Quota/Dict
+ 
+connect = host=localhost dbname=mail user=mail_admin password=password
+
+map {
+  pattern = priv/quota/storage
+  table = storage
+  username_field = account
+  value_field = bytes
+}
+
+map {
+  pattern = priv/quota/messages
+  table = storage
+  username_field = account
+  value_field = messages
+}
