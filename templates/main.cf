@@ -104,6 +104,9 @@ smtpd_recipient_restrictions = permit_sasl_authenticated, permit_mynetworks, rej
 # DELIVERY CONFIGURATION #
 ##########################
 
+# filter through amavisd
+content_filter = amavisfeed:[127.0.0.1]:10024
+
 # use dovecot lda for delivery
 virtual_transport                   = dovecot
 dovecot_destination_recipient_limit = 1

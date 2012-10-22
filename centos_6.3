@@ -12,8 +12,13 @@
 # Revisions: 2012.10.20 Initial framework.
 #
 # Requisite: CentOS 6.3
+#            DNS Configured with FQDN
 #
-# Resources: 
+# Resources: <http://wiki.centos.org/HowTos/postfix_sasl>
+#            <http://wiki.centos.org/AdditionalResources/Repositories/RPMForge>
+#            <http://wiki.centos.org/HowTos/Amavisd>
+#            <http://wiki.mediatemple.net/w/(ve):Install_Postfix_with_Dovecot_on_CentOS>
+#            <http://www.howtoforge.com/virtual-users-and-domains-with-postfix-courier-mysql-and-squirrelmail-centos-6.2-x86_64>
 #
 # Task List: - create script to generate virtualhost conf files in httpd/conf.d
 #            - create script to manage email accounts
@@ -25,7 +30,7 @@
 # Helper Functions #
 ####################
 
-checks () {
+checks () {                                   # args: user path
   FUN=$(basename $0)                          # get function name
   LOC=`echo $0 | sed "s/${FUN}//"`            # get current location
   DIE=false                                   # default no errors
@@ -37,21 +42,26 @@ checks () {
     echo "error: $FUN must be run from $LOC"  # wrong path error message
     DIE=true                                  # register errors
   }
-  if $DIE; then
+  if $DIE; then                               # if error found then...
     exit 1                                    # drop out of script
   fi
 }
 
-prompt () {
+prompt () {                           # args: 'prompt string' VARIABLE
   eval DEFAULT=\$$2                   # references an external default variable
   read -p "$1 [$DEFAULT] " NEWVALUE   # read answer into a temporary variable
   eval $2=${NEWVALUE:-$DEFAULT}       # param expan if null or unset use default
 }
 
-installTemplate () {
-  cp -a $2 $2.orig                              # creat backup of original file
-  sed -n "/<${3}>/,/<\/${3}>/p" $1 > $2         # replace with template chunk
-  sed -i "/<${3}>/d;/<\/${3}>/d" $2             # clear out the tags
+installTemplate () {                          # args: template target [chunk]
+  TEM="$CURRDIR/templates/$1"                 # set template path
+  cp -a $2 $2.orig                            # creat backup of original file
+  if [ -z "$3" ]; then                        # if no chunk defined then...
+    \cp $TEM $2                               # replace with the whole template
+  else                                        # but if chunk is defined
+    sed -n "/<${3}>/,/<\/${3}>/p" $TEM > $2   # replace with template chunk
+    sed -i "/<${3}>/d;/<\/${3}>/d" $2         # clear out the tags
+  fi
 }
 
 ##################
@@ -64,24 +74,29 @@ checks root .
 # Establish Variables #
 #######################
 
-DIR=`pwd`
-TEM="$DIR/templates/"
-IP=`ifconfig | grep 'inet addr:' | grep -v '127.0.0.1' | cut -d: -f2 | awk 'NR==1 {print $1}'`
-CONFIRMATION='no'
+CURRDIR=`pwd`
+ADDRESS=`ifconfig | grep 'inet addr:' | grep -v '127.0.0.1' | cut -d: -f2 | awk 'NR==1 {print $1}'`
+CONFIRM='no'
+PS3='Enter Number > '
 
 # setup a decent environment
 export EDITOR='vi'
 
 # establish defaults
-USERNAME='admin'
-GUID='615'
-SSHPORT='ssh'
-DOMAIN='example.com'
-ADMIN='admin@example.com'
-PASSWD=''
+USERNAME='admin'              # administrators account with sudo
+GUID='615'                    # group and user id for admin
+SSHPORT='ssh'                 # port to allow ssh in on
+DOMAIN='example.com'          # primary domain name
+ADMIN='admin@example.com'     # apache server admin email
+PASSWD=''                     # mysql mail_admin password
+PMPWD=''                      # postmaster email password
+#MAILDIR='/var/mail/vhosts'   # add as option later
+#VWEBDIR='/var/www/vhosts'    # add as option later
+#SWEBDIR='/var/www/html'      # add as option later
+#SERVICES='imap'              # add as option later (imap pop3)
 
 # prompts
-while [ $CONFIRMATION == "no" ]; do
+while [ $CONFIRM == "no" ]; do
   clear
   prompt "What username would you like?" USERNAME
   prompt "What is $USERNAME's uid and gid?" GUID
@@ -90,21 +105,31 @@ while [ $CONFIRMATION == "no" ]; do
   prompt "What is this systems domain name?" DOMAIN
   prompt "What is the server admins email?" ADMIN
   stty -echo
-  prompt "Define a password for mysql mail_admin." PASSWD
+  prompt "Set a password for mysql mail_admin." PASSWD
+  prompt "Set a password for postmaster email." PMPWD
   stty echo
   echo ""
-  echo "                     Your Username: $USERNAME"
-  echo "              Your User & Group ID: $GUID"
-  echo "                          SSH Port: $SSHPORT"
-  echo "                   Host Short Name: $HOSTNAME"
-  echo "                            Domain: $DOMAIN"
-  echo "       Fully Qualified Domain Name: $HOSTNAME.$DOMAIN"
-  echo "        Server Administrator Email: $ADMIN"
+  echo ""
+  echo " The system will be configured as follows:"
+  echo ""
+  echo "               Your Username: $USERNAME"
+  echo "        Your User & Group ID: $GUID"
+  echo "                    SSH Port: $SSHPORT"
+  echo "             Host Short Name: $HOSTNAME"
+  echo "                      Domain: $DOMAIN"
+  echo " Fully Qualified Domain Name: $HOSTNAME.$DOMAIN"
+  echo "  Server Administrator Email: $ADMIN"
   if [ -z "$PASSWD" ]; then
-    echo " MySQL mail_admin Account Password: UNSET"
+    echo "   MySQL mail_admin Password: <UNSET>"
   else
-    echo " MySQL mail_admin Account Password: *****"
+    echo "   MySQL mail_admin Password: *****"
   fi
+  if [ -z "$PMPWD" ]; then
+    echo "  Postmaster E-mail Password: <UNSET>"
+  else
+    echo "  Postmaster E-mail Password: *****"
+  fi
+  echo ""
   echo ""
   echo "Is the above information correct?"
   select yn in "Yes" "No"; do
@@ -113,31 +138,32 @@ while [ $CONFIRMATION == "no" ]; do
       echo "Are you sure you wish to proceed?"
             select final in "Yes" "No"; do
               case $final in
-                Yes ) CONFIRMATION="yes"; echo ""; break;;
+                Yes ) CONFIRM="yes"; echo ""; break;;
                 No ) echo ""; exit 0; break;;
               esac
             done
             break;;
-      No ) CONFIRMATION="no"; break;;
+      No ) CONFIRM="no"; break;;
     esac
   done
 done
-
 
 ##########
 # Run It #
 ##########
 
+# enable rpmforge
+rpm --import http://apt.sw.be/RPM-GPG-KEY.dag.txt
+rpm -ivh http://pkgs.repoforge.org/rpmforge-release/rpmforge-release-0.5.2-2.el6.rf.x86_64.rpm
+
 # patch update and install needed packages
 yum -y update
-yum -y install man wget vim telnet crypto-utils mod_ssl tree bind-utils ntp httpd mysql-server php php-mysql postfix dovecot dovecot-mysql mailx sudo git ruby rubygems setroubleshoot
-
-# enable other repos
+yum -y install man wget vim telnet crypto-utils mod_ssl tree bind-utils ntp httpd mysql-server php php-mysql postfix dovecot dovecot-mysql mailx sudo git ruby rubygems setroubleshoot amavisd-new clamav clamav-devel clamd spamassassin
 
 # setup hostname
 sed -i "s/\(^HOSTNAME=\).*/\1${HOSTNAME}/" /etc/sysconfig/network
 hostname $HOSTNAME
-echo -e "${IP}\t${HOSTNAME}.${DOMAIN} ${HOSTNAME}" >> /etc/hosts
+echo -e "${ADDRESS}\t${HOSTNAME}.${DOMAIN} ${HOSTNAME}" >> /etc/hosts
 
 # setup user accounts
 useradd -u $GUID -d /home/$USERNAME/ -m -U -s /bin/bash $USERNAME
@@ -152,8 +178,8 @@ echo "Set a password for $USERNAME."
 passwd $USERNAME
 
 # dotfiles
-installTemplate ${TEM}bashrc ~/.bashrc DEFAULT
-installTemplate ${TEM}bashrc /home/$USERNAME/.bashrc DEFAULT
+installTemplate bashrc ~/.bashrc DEFAULT
+installTemplate bashrc /home/$USERNAME/.bashrc DEFAULT
 # vim files !!
 
 # configure ssh
@@ -165,7 +191,7 @@ echo "PermitRootLogin no" >> /etc/ssh/sshd_config
 
 # configure iptables
 chkconfig iptables on
-installTemplate ${TEM}iptables /etc/sysconfig/iptables FULL
+installTemplate iptables /etc/sysconfig/iptables FULL
 sed -i "s/--dport ssh/--dport ${SSHPORT}/g" /etc/sysconfig/iptables
 
 # enable selinux
@@ -191,16 +217,15 @@ ntpdate $NTPSERVER
 mv /etc/php.d/sqlite3.ini /etc/php.d/sqlite3.disable
 mv /etc/php.d/pdo_sqlite.ini /etc/php.d/pdo_sqlite.disable
 mv /etc/php.d/curl.ini /etc/php.d/curl.disable
-mv /etc/php.ini /etc/php.ini.orig
-cp $TEM/php.ini /etc/
+installTemplate php.ini /etc/php.ini
 
 # configure apache
 chkconfig httpd on
-mv /etc/httpd/conf/httpd.conf /etc/httpd/conf/httpd.conf.orig
-cp $TEM/httpd.conf /etc/httpd/conf/
+installTemplate httpd.conf /etc/httpd/conf/httpd.conf
+installTemplate vhost.conf /etc/httpd/conf.d/$DOMAIN.conf
 sed -i "s/\(^ServerAdmin \).*/\1${ADMIN}/" /etc/httpd/conf/httpd.conf
-cp $TEM/vhost.conf /etc/httpd/conf.d/$DOMAIN.conf
 sed -i "s/virtualdomain.com/${DOMAIN}/g" /etc/httpd/conf.d/$DOMAIN.conf
+mkdir /var/www/html/$DOMAIN
 
 # configure postfix
 chkconfig postfix on
@@ -210,18 +235,17 @@ QUERY3="FLUSH PRIVILEGES;"
 SQL="${QUERY1}${QUERY2}${QUERY3}"
 echo "Logging in to mysql as root..."
 mysql -u root -p -e "$SQL"
-mysql -u root -p$PASSWD mail < $TEM/mail.isam.sql
-mv /etc/postfix/main.cf /etc/postfix/main.cf.orig
-cp $TEM/main.cf /etc/postfix/
-mv /etc/postfix/master.cf /etc/postfix/master.cf.orig
-cp $TEM/master.cf /etc/postfix/
-cp $TEM/mysql_virtual_domains.cf /etc/postfix/
-cp $TEM/mysql_virtual_forwardings.cf /etc/postfix/
-cp $TEM/mysql_virtual_mailboxes.cf /etc/postfix/
-cp $TEM/mysql_virtual_mailbox_limits.cf /etc/postfix/
-cp $TEM/mysql_virtual_transports.cf /etc/postfix/
+mysql -u mail_admin -p$PASSWD mail < $CURRDIR/templates/mail.isam.sql
+installTemplate main.cf /etc/postfix/main.cf
+installTemplate master.cf /etc/postfix/master.cf
+installTemplate mysql_virtual_domains.cf /etc/postfix/mysql_virtual_domains.cf
+installTemplate mysql_virtual_forwardings.cf /etc/postfix/mysql_virtual_forwardings.cf
+installTemplate mysql_virtual_mailboxes.cf /etc/postfix/mysql_virtual_mailboxes.cf
+installTemplate mysql_virtual_mailbox_limits.cf /etc/postfix/mysql_virtual_mailbox_limits.cf
+installTemplate mysql_virtual_transports.cf /etc/postfix/mysql_virtual_transports.cf
 sed -i "s/\(^myhostname = \).*$/\1${HOSTNAME}.${DOMAIN}/" /etc/postfix/main.cf
 sed -i "s/\(^mydomain = \).*$/\1${DOMAIN}/" /etc/postfix/main.cf
+sed -i "s/mail.example.com/${HOSTNAME}.${DOMAIN}/" /etc/postfix/main.cf
 sed -i "s/\(^password = \).*$/\1${PASSWD}/" /etc/postfix/mysql_virtual_domains.cf
 sed -i "s/\(^password = \).*$/\1${PASSWD}/" /etc/postfix/mysql_virtual_forwardings.cf
 sed -i "s/\(^password = \).*$/\1${PASSWD}/" /etc/postfix/mysql_virtual_mailboxes.cf
@@ -231,20 +255,51 @@ sed -i "s/\(^password = \).*$/\1${PASSWD}/" /etc/postfix/mysql_virtual_transport
 # configure dovecot
 chkconfig dovecot on
 sed -i 's/^#\(protocols = \).*$/\1imap/' /etc/dovecot/dovecot.conf
-\cp $TEM/dovecot.conf /etc/dovecot/
-\cp $TEM/10-auth.conf /etc/dovecot/conf.d/
-\cp $TEM/10-mail.conf /etc/dovecot/conf.d/
-\cp $TEM/10-master.conf /etc/dovecot/conf.d/
-\cp $TEM/10-ssl.conf /etc/dovecot/conf.d/
-\cp $TEM/20-imap.conf /etc/dovecot/conf.d/
-\cp $TEM/20-pop3.conf /etc/dovecot/conf.d/
-\cp $TEM/90-quota.conf /etc/dovecot/conf.d/
-\cp $TEM/auth-sql.conf.ext /etc/dovecot/conf.d/
-cp $TEM/dovecot-dict-sql.conf.ext /etc/dovecot/
-cp $TEM/dovecot-sql.conf.ext /etc/dovecot/
+installTemplate dovecot.conf /etc/dovecot/dovecot.conf
+installTemplate 10-auth.conf /etc/dovecot/conf.d/10-auth.conf
+installTemplate 10-mail.conf /etc/dovecot/conf.d/10-mail.conf
+installTemplate 10-master.conf /etc/dovecot/conf.d/10-master.conf
+installTemplate 10-ssl.conf /etc/dovecot/conf.d/10-ssl.conf
+installTemplate 20-imap.conf /etc/dovecot/conf.d/20-imap.conf
+installTemplate 20-pop3.conf /etc/dovecot/conf.d/20-pop3.conf
+installTemplate 90-quota.conf /etc/dovecot/conf.d/90-quota.conf
+installTemplate auth-sql.conf.ext /etc/dovecot/conf.d/auth-sql.conf.ext
+installTemplate dovecot-dict-sql.conf.ext /etc/dovecot/dovecot-dict-sql.conf.ext
+installTemplate dovecot-sql.conf.ext /etc/dovecot/dovecot-sql.conf.ext
 sed -i "s/mail.example.com/${HOSTNAME}.${DOMAIN}/g" /etc/dovecot/conf.d/10-ssl.conf
 sed -i "s/\(password=\)password/\1${PASSWD}/" /etc/dovecot/dovecot-dict-sql.conf.ext
 sed -i "s/\(password=\)password/\1${PASSWD}/" /etc/dovecot/dovecot-sql.conf.ext
+
+# configure clamav
+sed -i 's/^TCPSocket.*$/#&/' /etc/clamd.conf
+freshclam
+
+# configure amavisd-new
+sed -i "s/host.example.com/${HOSTNAME}.${DOMAIN}/g" /etc/amavisd.conf
+sed -i "s/example.com/${DOMAIN}/g" /etc/amavisd.conf
+sed -i "s/^# \(\$MYHOME = .*$\)/\1/" /etc/amavisd.conf
+sed -i "s/^# \(\$helpers_home = .*$\)/\1/" /etc/amavisd.conf
+sed -i "s/^# \(\$lock_file = .*$\)/\1/" /etc/amavisd.conf
+sed -i "s/^# \(\$lock_file = .*$\)/\1/" /etc/amavisd.conf
+sed -i "s/^# \(\$pid_file  = .*$\)/\1/" /etc/amavisd.conf
+sed -i "s/^# \(\$myhostname = .*$\)/\1/" /etc/amavisd.conf
+sed -i "s/virusalert/postmaster/g" /etc/amavisd.conf
+sed -i "s/spam.police/postmaster/g" /etc/amavisd.conf
+sed -i "s/var\/run\/clamav\/clamd/&.sock/" /etc/amavisd.conf
+sed -i "s/^#\( \['ClamAV.*$\)/ \1/" /etc/amavisd.conf
+sed -i "s/^#\(.*clamd.sock.*$\)/ \1/" /etc/amavisd.conf
+sed -i "s/^#\(   qr..bOK.*$\)/ \1/" /etc/amavisd.conf
+sed -i "s/^#\(   qr\/^\.\*?:.*\)/ \1/" /etc/amavisd.conf
+
+# create a postmaster account
+stty -echo
+CRAMPMPWD=`doveadm pw -p $PMPWD`
+stty echo
+QUERY1="USE mail;"
+QUERY2="INSERT INTO users VALUES ('postmaster@${DOMAIN}','${CRAMPMPWD}','524288000');"
+QUERY3="FLUSH PRIVILEGES;"
+SQL="${QUERY1}${QUERY2}${QUERY3}"
+mysql -u mail_admin -p$PASSWD -e "$SQL"
 
 # generate cert and key
 genkey --days 365 $HOSTNAME.$DOMAIN
@@ -257,6 +312,7 @@ init 6
 exit 0
 
 # AFTER REBOOT TASK LIST
+# check for selinux failures by running in permissive mode??
 # setup mail users
 # setup virtualhosts
 # check hostname with hostname
