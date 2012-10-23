@@ -1,13 +1,11 @@
 #!/bin/bash
 #
-# CentOS 6.3
+# Initialize
 #
-# Configuration script for CentOS 6.3 to setup a web and mail server hosting
-# multiple domains.  Built for Rackspace cloud servers but could easily be
-# adapted for any CentOS 6.3 installation.  Built as fast, lightweight and
-# secure as possible.
-#
-#   - Creates mail server at mail.example.com
+# Configuration script for linux systems to setup a web and mail server hosting
+# multiple domains.  The script is currently built specifically for CentOS 6.3,
+# though it could easily be adapted for other linux distributions and versions.
+# The goal is a lightweight, fast and secure server configured in minutes.
 #
 # Author(s): Cody Buell
 #
@@ -15,8 +13,16 @@
 #
 # Requisite: CentOS 6.3
 #            DNS Configured with FQDN
+#               domain.com
+#               host.domain.com
+#               mail.domain.com
+#            Configured IP with internet access
 #
-# Resources: <http://wiki.centos.org/HowTos/postfix_sasl>
+# Resources: <http://www.postfix.org/>
+#            <http://www.dovecot.org/>
+#            <http://www.apache.org/>
+#            <http://www.centos.org/>
+#            <http://wiki.centos.org/HowTos/postfix_sasl>
 #            <http://wiki.centos.org/AdditionalResources/Repositories/RPMForge>
 #            <http://wiki.centos.org/HowTos/Amavisd>
 #            <http://wiki.mediatemple.net/w/(ve):Install_Postfix_with_Dovecot_on_CentOS>
@@ -27,6 +33,22 @@
 #            - configure this script to work with other distros
 #            - prompts to determine what to configure (apache, mail, both...)
 #            - yum removes? network manager? managers?
+#            - add distro and version checks/detection
+#            - put all configurations in functions by component and add menu to
+#              selectively install
+#            - clean up templates
+#            - improve httpd.conf template
+#            - check for selinux errors
+#            - add 'active' column in mysql users table and where clause in
+#              postfix and dovecot sql access files then test
+#            - need to be able to setup visudo without interaction...
+#            - log all output from script to new log file
+#            - send a welcome email to postmaster account?
+#            - add test option, checks ports are up, tests amavis, etc...
+#            - move vhosts to /var/www/vhosts?? change html to vhosts?  still
+#              need html directory??
+#            - add some useful dotfiles?  vim git etc...
+#            - add pyzor and dcc
 
 ####################
 # Helper Functions #
