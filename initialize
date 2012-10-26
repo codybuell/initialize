@@ -43,12 +43,22 @@
 #              postfix and dovecot sql access files then test
 #            - need to be able to setup visudo without interaction...
 #            - log all output from script to new log file
-#            - send a welcome email to postmaster account?
+#            - create a text file or output when first logging in that gives details on how to
+#              access administrator email account
+#            - prompt to create another email account?
+#            - send a welcome email to administrator with server configuration info
 #            - add test option, checks ports are up, tests amavis, etc...
 #            - move vhosts to /var/www/vhosts?? change html to vhosts?  still
 #              need html directory??
 #            - add some useful dotfiles?  vim git etc...
 #            - add pyzor and dcc
+#            - use dialog or whiptail?
+#            - output next steps and what has been configured to a text file?
+#            - run a check on the rpmforge package??
+#            - secure mysql without interaction?
+#            - fix the first cert you get when setting up a mail account, localhost.localdomain
+#            - see if there is a way to flush administrator email when it gets full, delete one for one received?
+#            - setup quota warning emails to administrator in 90-quota.conf dovecot config
 
 ####################
 # Helper Functions #
@@ -88,11 +98,233 @@ installTemplate () {                          # args: template target [chunk]
   fi
 }
 
+###########################
+# Configuration Functions #
+###########################
+
+rpmforgeEnable () {
+  rpm --import http://apt.sw.be/RPM-GPG-KEY.dag.txt
+  rpm -ivh http://pkgs.repoforge.org/rpmforge-release/rpmforge-release-0.5.2-2.el6.rf.x86_64.rpm
+}
+
+updateSystem () {
+  yum -y update
+}
+
+installPackages () {
+  yum -y install man wget vim telnet crypto-utils mod_ssl tree bind-utils ntp httpd mysql-server php php-mysql postfix dovecot dovecot-mysql mailx sudo git ruby rubygems setroubleshoot amavisd-new clamav clamav-devel clamd spamassassin
+}
+
+configureHostname () {
+  sed -i "s/\(^HOSTNAME=\).*/\1${HOSTNAME}/" /etc/sysconfig/network
+  hostname $HOSTNAME
+  echo -e "${ADDRESS}\t${HOSTNAME}.${DOMAIN} mail.${DOMAIN} ${DOMAIN} ${HOSTNAME}" >> /etc/hosts
+}
+
+configureAccounts () {
+  useradd -u $GUID -d /home/$USERNAME/ -m -U -s /bin/bash $USERNAME
+  useradd -u 5000 -d /var/mail/vhosts/ -m -U -s /sbin/nologin vmail
+  groupmems -a $USERNAME -g wheel
+  echo "In the following screen, uncomment the line:"
+  echo "  # %wheel  ALL=(ALL) NOPASSWD: ALL"
+  echo "Press any key to begin."
+  read -n 1
+  visudo
+  echo "Set a password for $USERNAME."
+  passwd $USERNAME
+}
+
+dotfiles () {
+  installTemplate bashrc ~/.bashrc DEFAULT
+  installTemplate bashrc /home/$USERNAME/.bashrc DEFAULT
+}
+
+configureSSH () {
+  echo "" >> /etc/ssh/sshd_config
+  echo "# Customizations" >> /etc/ssh/sshd_config
+  echo "AllowUsers $USERNAME" >> /etc/ssh/sshd_config
+  echo "Port $SSHPORT" >> /etc/ssh/sshd_config
+  echo "PermitRootLogin no" >> /etc/ssh/sshd_config
+}
+
+configureFirewall () {
+  chkconfig iptables on
+  installTemplate iptables /etc/sysconfig/iptables FULL
+  if [ $SSHPORT != '22' ]; then
+    sed -i "s/--dport ssh/--dport ${SSHPORT}/g" /etc/sysconfig/iptables
+  fi
+}
+
+configureSELinux () {
+  sed -i "s/\(SELINUX=\).*$/\1enforcing/" /etc/sysconfig/selinux
+  sed -i "s/\(SELINUXTYPE=\).*$/\1targeted/" /etc/sysconfig/selinux
+  [ $SSHPORT != 'ssh' ] && {
+    semanage port -a -t ssh_port_t -p tcp $SSHPORT
+  }
+  touch /.autorelabel
+}
+
+configureMySQL () {
+  chkconfig mysqld on
+  service mysqld start
+  mysql_secure_installation
+  sed -i 's/\[mysqld\]/&\nbind-address=127.0.0.1/' /etc/my.cnf
+}
+
+configureNTP () {
+  NTPSERVER=`cat /etc/ntp.conf | sed -n 's/^server //p' | head -1`
+  chkconfig ntpd on
+  ntpdate $NTPSERVER
+}
+
+configurePHP () {
+  mv /etc/php.d/sqlite3.ini /etc/php.d/sqlite3.disable
+  mv /etc/php.d/pdo_sqlite.ini /etc/php.d/pdo_sqlite.disable
+  mv /etc/php.d/curl.ini /etc/php.d/curl.disable
+  installTemplate php.ini /etc/php.ini
+}
+
+configureApache () {
+  chkconfig httpd on
+  installTemplate httpd.conf /etc/httpd/conf/httpd.conf
+  installTemplate vhost.conf /etc/httpd/conf.d/$DOMAIN.conf
+  sed -i "s/\(^ServerAdmin \).*/\1${ADMIN}/" /etc/httpd/conf/httpd.conf
+  sed -i "s/virtualdomain.com/${DOMAIN}/g" /etc/httpd/conf.d/$DOMAIN.conf
+  sed -i "s/localhost/${DOMAIN}/" /etc/httpd/conf.d/ssl.conf
+  mkdir /var/www/html/$DOMAIN
+}
+
+configurePostfix () {
+  chkconfig postfix on
+  QUERY1="CREATE DATABASE IF NOT EXISTS mail;"
+  QUERY2="GRANT ALL ON mail.* TO 'mail_admin'@'localhost' IDENTIFIED BY '$PASSWD';"
+  QUERY3="FLUSH PRIVILEGES;"
+  SQL="${QUERY1}${QUERY2}${QUERY3}"
+  echo "Logging in to mysql as root..."
+  mysql -u root -p -e "$SQL"
+  mysql -u mail_admin -p$PASSWD mail < $CURRDIR/templates/mail.isam.sql
+  installTemplate main.cf /etc/postfix/main.cf
+  installTemplate master.cf /etc/postfix/master.cf
+  installTemplate mysql_virtual_domains.cf /etc/postfix/mysql_virtual_domains.cf
+  installTemplate mysql_virtual_forwardings.cf /etc/postfix/mysql_virtual_forwardings.cf
+  installTemplate mysql_virtual_mailboxes.cf /etc/postfix/mysql_virtual_mailboxes.cf
+  installTemplate mysql_virtual_mailbox_limits.cf /etc/postfix/mysql_virtual_mailbox_limits.cf
+  installTemplate mysql_virtual_transports.cf /etc/postfix/mysql_virtual_transports.cf
+  sed -i "s/example.com/${DOMAIN}/" /etc/postfix/main.cf
+  sed -i "s/\(^password = \).*$/\1${PASSWD}/" /etc/postfix/mysql_virtual_domains.cf
+  sed -i "s/\(^password = \).*$/\1${PASSWD}/" /etc/postfix/mysql_virtual_forwardings.cf
+  sed -i "s/\(^password = \).*$/\1${PASSWD}/" /etc/postfix/mysql_virtual_mailboxes.cf
+  sed -i "s/\(^password = \).*$/\1${PASSWD}/" /etc/postfix/mysql_virtual_mailbox_limits.cf
+  sed -i "s/\(^password = \).*$/\1${PASSWD}/" /etc/postfix/mysql_virtual_transports.cf
+}
+
+configureDovecot () {
+  chkconfig dovecot on
+  sed -i 's/^#\(protocols = \).*$/\1imap/' /etc/dovecot/dovecot.conf
+  installTemplate dovecot.conf /etc/dovecot/dovecot.conf
+  installTemplate 10-auth.conf /etc/dovecot/conf.d/10-auth.conf
+  installTemplate 10-mail.conf /etc/dovecot/conf.d/10-mail.conf
+  installTemplate 10-master.conf /etc/dovecot/conf.d/10-master.conf
+  installTemplate 10-ssl.conf /etc/dovecot/conf.d/10-ssl.conf
+  installTemplate 20-imap.conf /etc/dovecot/conf.d/20-imap.conf
+  installTemplate 20-pop3.conf /etc/dovecot/conf.d/20-pop3.conf
+  installTemplate 90-quota.conf /etc/dovecot/conf.d/90-quota.conf
+  installTemplate auth-sql.conf.ext /etc/dovecot/conf.d/auth-sql.conf.ext
+  installTemplate dovecot-dict-sql.conf.ext /etc/dovecot/dovecot-dict-sql.conf.ext
+  installTemplate dovecot-sql.conf.ext /etc/dovecot/dovecot-sql.conf.ext
+  sed -i "s/example.com/${DOMAIN}/g" /etc/dovecot/conf.d/10-ssl.conf
+  sed -i "s/\(password=\)password/\1${PASSWD}/" /etc/dovecot/dovecot-dict-sql.conf.ext
+  sed -i "s/\(password=\)password/\1${PASSWD}/" /etc/dovecot/dovecot-sql.conf.ext
+}
+
+configureClamAV () {
+  sed -i 's/^TCPSocket.*$/#&/' /etc/clamd.conf
+  freshclam
+}
+
+configureAmavis () {
+  sed -i "s/host.example.com/mail.${DOMAIN}/g" /etc/amavisd.conf
+  sed -i "s/example.com/${DOMAIN}/g" /etc/amavisd.conf
+  sed -i "s/^# \(\$MYHOME = .*$\)/\1/" /etc/amavisd.conf
+  sed -i "s/^# \(\$helpers_home = .*$\)/\1/" /etc/amavisd.conf
+  sed -i "s/^# \(\$lock_file = .*$\)/\1/" /etc/amavisd.conf
+  sed -i "s/^# \(\$lock_file = .*$\)/\1/" /etc/amavisd.conf
+  sed -i "s/^# \(\$pid_file  = .*$\)/\1/" /etc/amavisd.conf
+  sed -i "s/^# \(\$myhostname = .*$\)/\1/" /etc/amavisd.conf
+  sed -i "s/virusalert/administrator/g" /etc/amavisd.conf
+  sed -i "s/spam.police/administrator/g" /etc/amavisd.conf
+  sed -i "s/var\/run\/clamav\/clamd/&.sock/" /etc/amavisd.conf
+  sed -i "s/^#\( \['ClamAV.*$\)/ \1/" /etc/amavisd.conf
+  sed -i "s/^#\(.*clamd.sock.*$\)/ \1/" /etc/amavisd.conf
+  sed -i "s/^#\(   qr..bOK.*$\)/ \1/" /etc/amavisd.conf
+  sed -i "s/^#\(   qr\/^\.\*?:.*\)/ \1/" /etc/amavisd.conf
+}
+
+configureMailAccounts () {
+  stty -echo
+  CRAMADMPWD=`doveadm pw -p $PMPWD`
+  stty echo
+  QUERY1="USE mail;"
+  QUERY2="INSERT INTO domains VALUES ('${DOMAIN}');"
+  QUERY3="INSERT INTO users VALUES ('administrator@${DOMAIN}','${CRAMADMPWD}','524288000');"
+  QUERY4="INSERT INTO forwardings VALUES ('webmaster@${DOMAIN}','administrator@${DOMAIN}');"
+  QUERY5="INSERT INTO forwardings VALUES ('postmaster@${DOMAIN}','administrator@${DOMAIN}');"
+  QUERY6="INSERT INTO forwardings VALUES ('root@${DOMAIN}','administrator@${DOMAIN}');"
+  SQL="${QUERY1}${QUERY2}${QUERY3}${QUERY4}${QUERY5}${QUERY6}"
+  mysql -u mail_admin -p$PASSWD -e "$SQL"
+}
+
+generateKeys () {
+  genkey --days 365 $DOMAIN
+}
+
+rebootSystem () {
+  echo "Configuration is complete and the system needs to reboot."
+  echo "Press any key to continue..."
+  read -n 1
+  init 6
+  exit 0
+}
+
 ##################
 # Initial Checks #
 ##################
 
+# check user and run path
 checks root .
+
+# distro detection
+if [ -f /etc/redhat-release ]; then
+  DIST=`head -1 /etc/redhat-release | awk '{print $1}'`
+  RELS=`head -1 /etc/redhat-release | sed -e 's/[^0-9.]//g'`
+  BITS=`uname -i`
+  PMAN='yum'
+#elif [ -f /etc/debian_version ]; then
+# DIST=`lsb_release -s -d | awk '{print $1}'`
+# RELS=`lsb_release -s -d | sed -e 's/[^0-9.]//g'`
+# BITS=`uname -m`
+# PMAN='apt-get'
+else
+  echo 'This distribution of linux is currently not supported.'
+  exit 1
+fi
+
+# potential solution for distro specific runs...
+# if [ $DIST == 'CentOS' ]; then
+#   case $RELS in
+#     6.3 ) yum -y install blablabla; break;;
+#     * ) yum -y install blablabla;;
+#   esac
+# elif [ $DIST == 'Red']; then
+#   case $RELS in
+#     6.3 ) break;;
+#     * ) ;;
+#   esac
+# elif [ $DIST == 'Ubuntu']; then
+#   case $RELS in
+#     * ) apt-get install blablabla;;
+#   esac
+# fi
 
 #######################
 # Establish Variables #
@@ -111,9 +343,8 @@ USERNAME='admin'              # administrators account with sudo
 GUID='615'                    # group and user id for admin
 SSHPORT='22'                  # port to allow ssh in on
 DOMAIN='example.com'          # primary domain name
-ADMIN='admin@example.com'     # apache server admin email
 PASSWD=''                     # mysql mail_admin password
-PMPWD=''                      # postmaster email password
+PMPWD=''                      # administrator email password
 #MAILDIR='/var/mail/vhosts'   # add as option later
 #VWEBDIR='/var/www/vhosts'    # add as option later
 #SWEBDIR='/var/www/html'      # add as option later
@@ -127,11 +358,11 @@ while [ $CONFIRM == "no" ]; do
   prompt "What port would you like to use for ssh?" SSHPORT
   prompt "What is this systems short name?" HOSTNAME
   prompt "What is this systems domain name?" DOMAIN
-  prompt "What is the server admins email?" ADMIN
+  ADMIN="administrator@$DOMAIN"
   stty -echo
   prompt "Set a password for mysql mail_admin." PASSWD
   echo ""
-  prompt "Set a password for postmaster email." PMPWD
+  prompt "Set a password for administrator email." PMPWD
   stty echo
   echo ""
   echo ""
@@ -177,179 +408,23 @@ done
 # Run It #
 ##########
 
-# enable rpmforge
-rpm --import http://apt.sw.be/RPM-GPG-KEY.dag.txt
-rpm -ivh http://pkgs.repoforge.org/rpmforge-release/rpmforge-release-0.5.2-2.el6.rf.x86_64.rpm
-
-# patch update and install needed packages
-yum -y update
-yum -y install man wget vim telnet crypto-utils mod_ssl tree bind-utils ntp httpd mysql-server php php-mysql postfix dovecot dovecot-mysql mailx sudo git ruby rubygems setroubleshoot amavisd-new clamav clamav-devel clamd spamassassin
-
-# setup hostname
-sed -i "s/\(^HOSTNAME=\).*/\1${HOSTNAME}/" /etc/sysconfig/network
-hostname $HOSTNAME
-echo -e "${ADDRESS}\t${HOSTNAME}.${DOMAIN} mail.${DOMAIN} ${HOSTNAME}" >> /etc/hosts
-
-# setup user accounts
-useradd -u $GUID -d /home/$USERNAME/ -m -U -s /bin/bash $USERNAME
-useradd -u 5000 -d /var/mail/vhosts/ -m -U -s /sbin/nologin vmail
-groupmems -a $USERNAME -g wheel
-echo "In the following screen, uncomment the line:"
-echo "  # %wheel  ALL=(ALL) NOPASSWD: ALL"
-echo "Press any key to begin."
-read -n 1
-visudo
-echo "Set a password for $USERNAME."
-passwd $USERNAME
-
-# dotfiles
-installTemplate bashrc ~/.bashrc DEFAULT
-installTemplate bashrc /home/$USERNAME/.bashrc DEFAULT
-# vim files !!
-
-# configure ssh
-echo "" >> /etc/ssh/sshd_config
-echo "# Customizations" >> /etc/ssh/sshd_config
-echo "AllowUsers $USERNAME" >> /etc/ssh/sshd_config
-echo "Port $SSHPORT" >> /etc/ssh/sshd_config
-echo "PermitRootLogin no" >> /etc/ssh/sshd_config
-
-# configure iptables
-chkconfig iptables on
-installTemplate iptables /etc/sysconfig/iptables FULL
-if [ $SSHPORT != '22' ]; then
-  sed -i "s/--dport ssh/--dport ${SSHPORT}/g" /etc/sysconfig/iptables
-fi
-
-# enable selinux
-sed -i "s/\(SELINUX=\).*$/\1enforcing/" /etc/sysconfig/selinux
-sed -i "s/\(SELINUXTYPE=\).*$/\1targeted/" /etc/sysconfig/selinux
-[ $SSHPORT != 'ssh' ] && {
-  semanage port -a -t ssh_port_t -p tcp $SSHPORT
-}
-touch /.autorelabel
-
-# configure mysql
-chkconfig mysqld on
-service mysqld start
-mysql_secure_installation
-sed -i 's/\[mysqld\]/&\nbind-address=127.0.0.1/' /etc/my.cnf
-
-# configure ntp
-NTPSERVER=`cat /etc/ntp.conf | sed -n 's/^server //p' | head -1`
-chkconfig ntpd on
-ntpdate $NTPSERVER
-
-# configure php
-mv /etc/php.d/sqlite3.ini /etc/php.d/sqlite3.disable
-mv /etc/php.d/pdo_sqlite.ini /etc/php.d/pdo_sqlite.disable
-mv /etc/php.d/curl.ini /etc/php.d/curl.disable
-installTemplate php.ini /etc/php.ini
-
-# configure apache
-chkconfig httpd on
-installTemplate httpd.conf /etc/httpd/conf/httpd.conf
-installTemplate vhost.conf /etc/httpd/conf.d/$DOMAIN.conf
-sed -i "s/\(^ServerAdmin \).*/\1${ADMIN}/" /etc/httpd/conf/httpd.conf
-sed -i "s/virtualdomain.com/${DOMAIN}/g" /etc/httpd/conf.d/$DOMAIN.conf
-mkdir /var/www/html/$DOMAIN
-
-# configure postfix
-chkconfig postfix on
-QUERY1="CREATE DATABASE IF NOT EXISTS mail;"
-QUERY2="GRANT ALL ON mail.* TO 'mail_admin'@'localhost' IDENTIFIED BY '$PASSWD';"
-QUERY3="FLUSH PRIVILEGES;"
-SQL="${QUERY1}${QUERY2}${QUERY3}"
-echo "Logging in to mysql as root..."
-mysql -u root -p -e "$SQL"
-mysql -u mail_admin -p$PASSWD mail < $CURRDIR/templates/mail.isam.sql
-installTemplate main.cf /etc/postfix/main.cf
-installTemplate master.cf /etc/postfix/master.cf
-installTemplate mysql_virtual_domains.cf /etc/postfix/mysql_virtual_domains.cf
-installTemplate mysql_virtual_forwardings.cf /etc/postfix/mysql_virtual_forwardings.cf
-installTemplate mysql_virtual_mailboxes.cf /etc/postfix/mysql_virtual_mailboxes.cf
-installTemplate mysql_virtual_mailbox_limits.cf /etc/postfix/mysql_virtual_mailbox_limits.cf
-installTemplate mysql_virtual_transports.cf /etc/postfix/mysql_virtual_transports.cf
-#sed -i "s/\(^myhostname = \).*$/\1${HOSTNAME}.${DOMAIN}/" /etc/postfix/main.cf
-sed -i "s/\(^myhostname = \).*$/\1mail.${DOMAIN}/" /etc/postfix/main.cf
-sed -i "s/\(^mydomain = \).*$/\1${DOMAIN}/" /etc/postfix/main.cf
-#sed -i "s/mail.example.com/${HOSTNAME}.${DOMAIN}/" /etc/postfix/main.cf
-sed -i "s/mail.example.com/mail.${DOMAIN}/" /etc/postfix/main.cf
-sed -i "s/\(^password = \).*$/\1${PASSWD}/" /etc/postfix/mysql_virtual_domains.cf
-sed -i "s/\(^password = \).*$/\1${PASSWD}/" /etc/postfix/mysql_virtual_forwardings.cf
-sed -i "s/\(^password = \).*$/\1${PASSWD}/" /etc/postfix/mysql_virtual_mailboxes.cf
-sed -i "s/\(^password = \).*$/\1${PASSWD}/" /etc/postfix/mysql_virtual_mailbox_limits.cf
-sed -i "s/\(^password = \).*$/\1${PASSWD}/" /etc/postfix/mysql_virtual_transports.cf
-
-# configure dovecot
-chkconfig dovecot on
-sed -i 's/^#\(protocols = \).*$/\1imap/' /etc/dovecot/dovecot.conf
-installTemplate dovecot.conf /etc/dovecot/dovecot.conf
-installTemplate 10-auth.conf /etc/dovecot/conf.d/10-auth.conf
-installTemplate 10-mail.conf /etc/dovecot/conf.d/10-mail.conf
-installTemplate 10-master.conf /etc/dovecot/conf.d/10-master.conf
-installTemplate 10-ssl.conf /etc/dovecot/conf.d/10-ssl.conf
-installTemplate 20-imap.conf /etc/dovecot/conf.d/20-imap.conf
-installTemplate 20-pop3.conf /etc/dovecot/conf.d/20-pop3.conf
-installTemplate 90-quota.conf /etc/dovecot/conf.d/90-quota.conf
-installTemplate auth-sql.conf.ext /etc/dovecot/conf.d/auth-sql.conf.ext
-installTemplate dovecot-dict-sql.conf.ext /etc/dovecot/dovecot-dict-sql.conf.ext
-installTemplate dovecot-sql.conf.ext /etc/dovecot/dovecot-sql.conf.ext
-#sed -i "s/mail.example.com/${HOSTNAME}.${DOMAIN}/g" /etc/dovecot/conf.d/10-ssl.conf
-sed -i "s/mail.example.com/mail.${DOMAIN}/g" /etc/dovecot/conf.d/10-ssl.conf
-sed -i "s/\(password=\)password/\1${PASSWD}/" /etc/dovecot/dovecot-dict-sql.conf.ext
-sed -i "s/\(password=\)password/\1${PASSWD}/" /etc/dovecot/dovecot-sql.conf.ext
-
-# configure clamav
-sed -i 's/^TCPSocket.*$/#&/' /etc/clamd.conf
-freshclam
-
-# configure amavisd-new
-#sed -i "s/host.example.com/${HOSTNAME}.${DOMAIN}/g" /etc/amavisd.conf
-sed -i "s/host.example.com/mail.${DOMAIN}/g" /etc/amavisd.conf
-sed -i "s/example.com/${DOMAIN}/g" /etc/amavisd.conf
-sed -i "s/^# \(\$MYHOME = .*$\)/\1/" /etc/amavisd.conf
-sed -i "s/^# \(\$helpers_home = .*$\)/\1/" /etc/amavisd.conf
-sed -i "s/^# \(\$lock_file = .*$\)/\1/" /etc/amavisd.conf
-sed -i "s/^# \(\$lock_file = .*$\)/\1/" /etc/amavisd.conf
-sed -i "s/^# \(\$pid_file  = .*$\)/\1/" /etc/amavisd.conf
-sed -i "s/^# \(\$myhostname = .*$\)/\1/" /etc/amavisd.conf
-sed -i "s/virusalert/postmaster/g" /etc/amavisd.conf
-sed -i "s/spam.police/postmaster/g" /etc/amavisd.conf
-sed -i "s/var\/run\/clamav\/clamd/&.sock/" /etc/amavisd.conf
-sed -i "s/^#\( \['ClamAV.*$\)/ \1/" /etc/amavisd.conf
-sed -i "s/^#\(.*clamd.sock.*$\)/ \1/" /etc/amavisd.conf
-sed -i "s/^#\(   qr..bOK.*$\)/ \1/" /etc/amavisd.conf
-sed -i "s/^#\(   qr\/^\.\*?:.*\)/ \1/" /etc/amavisd.conf
-
-# create a postmaster account
-stty -echo
-CRAMPMPWD=`doveadm pw -p $PMPWD`
-stty echo
-QUERY1="USE mail;"
-QUERY2="INSERT INTO domains VALUES ('${DOMAIN}');"
-QUERY3="INSERT INTO users VALUES ('postmaster@${DOMAIN}','${CRAMPMPWD}','524288000');"
-QUERY4="FLUSH PRIVILEGES;"
-SQL="${QUERY1}${QUERY2}${QUERY3}${QUERY4}"
-mysql -u mail_admin -p$PASSWD -e "$SQL"
-
-# generate cert and key
-#genkey --days 365 $HOSTNAME.$DOMAIN
-genkey --days 365 mail.$DOMAIN
-
-# reboot the system
-echo "Configuration is complete and the system needs to reboot."
-echo "Press any key to continue..."
-read -n 1
-init 6
-exit 0
-
-# AFTER REBOOT TASK LIST
-# check for selinux failures by running in permissive mode??
-# setup mail users
-# setup virtualhosts
-# check hostname with hostname
-# check ntp is running and synced with ntpstat
-# check selinux is on with sestatus
-# telnet and openssl to check mail server
-# check logs for errors
+rpmforgeEnable
+updateSystem
+installPackages
+configureHostname
+configureAccounts
+dotfiles
+configureSSH
+configureFirewall
+configureSELinux
+configureMySQL
+configureNTP
+configurePHP
+configureApache
+configurePostfix
+configureDovecot
+configureClamAV
+configureAmavis
+configureMailAccounts
+generateKeys
+rebootSystem

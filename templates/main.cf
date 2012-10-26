@@ -123,8 +123,8 @@ virtual_mailbox_base  = /var/mail
 smtpd_tls_security_level = may
 
 # cert and key locations
-smtpd_tls_key_file  = /etc/pki/tls/private/mail.example.com.key
-smtpd_tls_cert_file = /etc/pki/tls/certs/mail.example.com.crt
+smtpd_tls_key_file  = /etc/pki/tls/private/example.com.key
+smtpd_tls_cert_file = /etc/pki/tls/certs/example.com.crt
 # smtpd_tls_CAfile  = /etc/pki/tls/root.crt
 
 # enable logging of tls session
