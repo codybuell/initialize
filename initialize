@@ -28,32 +28,20 @@
 #            <http://wiki.mediatemple.net/w/(ve):Install_Postfix_with_Dovecot_on_CentOS>
 #            <http://www.howtoforge.com/virtual-users-and-domains-with-postfix-courier-mysql-and-squirrelmail-centos-6.2-x86_64>
 #
-# Task List: - create script to generate virtualhost conf files in httpd/conf.d
+# Task List: - create script to generate virtualhost (conf file, doc root, hosts file, certs)
 #            - create script to manage email accounts
-#            - configure this script to work with other distros
-#            - prompts to determine what to configure (apache, mail, both...)
+#            - utilize whiptail and add choice of what components to install
+#            - improve comments in script and templates, simplify templates
 #            - yum removes? network manager? managers?
-#            - add distro and version checks/detection
-#            - put all configurations in functions by component and add menu to
-#              selectively install
-#            - clean up templates
-#            - improve httpd.conf template
-#            - check for selinux errors
 #            - add 'active' column in mysql users table and where clause in
 #              postfix and dovecot sql access files then test
 #            - need to be able to setup visudo without interaction...
 #            - log all output from script to new log file
 #            - create a text file or output when first logging in that gives details on how to
 #              access administrator email account
-#            - prompt to create another email account?
 #            - send a welcome email to administrator with server configuration info
-#            - add test option, checks ports are up, tests amavis, etc...
-#            - move vhosts to /var/www/vhosts?? change html to vhosts?  still
-#              need html directory??
-#            - add some useful dotfiles?  vim git etc...
+#            - add some useful dotfiles?  vim git etc... history length...
 #            - add pyzor and dcc
-#            - use dialog or whiptail?
-#            - output next steps and what has been configured to a text file?
 #            - run a check on the rpmforge package??
 #            - secure mysql without interaction?
 #            - fix the first cert you get when setting up a mail account, localhost.localdomain
@@ -64,18 +52,43 @@
 # Helper Functions #
 ####################
 
-checks () {                                   # args: user path
+checks () {                                   # args: user path 'distros'
+  DIE=false                                   # default no errors
+
+  # check run location
   FUN=$(basename $0)                          # get function name
   LOC=`echo $0 | sed "s/${FUN}//"`            # get current location
-  DIE=false                                   # default no errors
-  [ `whoami` != $1 ] && {                     # check for correct user
-    echo "error: $FUN must be run as $1"      # wrong user error message
-    DIE=true                                  # register errors
-  }
   [ "$0" != $2/$(basename $0) ] && {          # check for correct path
     echo "error: $FUN must be run from $LOC"  # wrong path error message
     DIE=true                                  # register errors
   }
+
+  # check current user
+  [ `whoami` != $1 ] && {                     # check for correct user
+    echo "error: $FUN must be run as $1"      # wrong user error message
+    DIE=true                                  # register errors
+  }
+
+  # distro detection
+  if [ -f /etc/redhat-release ]; then
+    DIST=`head -1 /etc/redhat-release | awk '{print $1}'`
+    RELS=`head -1 /etc/redhat-release | sed -e 's/[^0-9.]//g'`
+    BITS=`uname -i`
+    PMAN='yum'
+  elif [ -f /etc/debian_version ]; then
+    DIST=`lsb_release -s -d | awk '{print $1}'`
+    RELS=`lsb_release -s -d | sed -e 's/[^0-9.]//g'`
+    BITS=`uname -m`
+    PMAN='apt-get'
+  fi
+  NAME="$DIST $RELS"
+  if grep -q "$NAME" <<< "$3"; then
+    NAME=
+  else
+    echo "error: $NAME is currently not supported"
+    DIE=true
+  fi
+
   if $DIE; then                               # if error found then...
     exit 1                                    # drop out of script
   fi
@@ -185,13 +198,18 @@ configurePHP () {
 }
 
 configureApache () {
+  mkdir /etc/httpd/vhost.d
+  mkdir -p /var/www/vhosts/$DOMAIN
   chkconfig httpd on
   installTemplate httpd.conf /etc/httpd/conf/httpd.conf
-  installTemplate vhost.conf /etc/httpd/conf.d/$DOMAIN.conf
+  installTemplate vhost.conf /etc/httpd/vhost.d/$DOMAIN.conf
+  installTemplate index.php /var/www/vhosts/$DOMAIN/index.php
+  installTemplate index.php /var/www/html/index.php
+  installTemplate ssl.conf /etc/httpd/conf.d/ssl.conf
   sed -i "s/\(^ServerAdmin \).*/\1${ADMIN}/" /etc/httpd/conf/httpd.conf
-  sed -i "s/virtualdomain.com/${DOMAIN}/g" /etc/httpd/conf.d/$DOMAIN.conf
-  sed -i "s/localhost/${DOMAIN}/" /etc/httpd/conf.d/ssl.conf
-  mkdir /var/www/html/$DOMAIN
+  sed -i "s/virtualdomain.com/${DOMAIN}/g" /etc/httpd/vhost.d/$DOMAIN.conf
+  sed -i "s/EXAMPLE/${DOMAIN}/g" /var/www/vhosts/$DOMAIN/index.php
+  sed -i "s/EXAMPLE/${HOSTNAME}/g" /var/www/html/index.php
 }
 
 configurePostfix () {
@@ -291,23 +309,7 @@ rebootSystem () {
 ##################
 
 # check user and run path
-checks root .
-
-# distro detection
-if [ -f /etc/redhat-release ]; then
-  DIST=`head -1 /etc/redhat-release | awk '{print $1}'`
-  RELS=`head -1 /etc/redhat-release | sed -e 's/[^0-9.]//g'`
-  BITS=`uname -i`
-  PMAN='yum'
-#elif [ -f /etc/debian_version ]; then
-# DIST=`lsb_release -s -d | awk '{print $1}'`
-# RELS=`lsb_release -s -d | sed -e 's/[^0-9.]//g'`
-# BITS=`uname -m`
-# PMAN='apt-get'
-else
-  echo 'This distribution of linux is currently not supported.'
-  exit 1
-fi
+checks root . 'CentOS 6.3'
 
 # potential solution for distro specific runs...
 # if [ $DIST == 'CentOS' ]; then
