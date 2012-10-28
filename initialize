@@ -138,11 +138,13 @@ configureAccounts () {
   useradd -u $GUID -d /home/$USERNAME/ -m -U -s /bin/bash $USERNAME
   useradd -u 5000 -d /var/mail/vhosts/ -m -U -s /sbin/nologin vmail
   groupmems -a $USERNAME -g wheel
+  clear
   echo "In the following screen, uncomment the line:"
   echo "  # %wheel  ALL=(ALL) NOPASSWD: ALL"
   echo "Press any key to begin."
   read -n 1
   visudo
+  clear
   echo "Set a password for $USERNAME."
   passwd $USERNAME
 }
@@ -180,6 +182,7 @@ configureSELinux () {
 configureMySQL () {
   chkconfig mysqld on
   service mysqld start
+  clear
   mysql_secure_installation
   sed -i 's/\[mysqld\]/&\nbind-address=127.0.0.1/' /etc/my.cnf
 }
@@ -218,6 +221,7 @@ configurePostfix () {
   QUERY2="GRANT ALL ON mail.* TO 'mail_admin'@'localhost' IDENTIFIED BY '$PASSWD';"
   QUERY3="FLUSH PRIVILEGES;"
   SQL="${QUERY1}${QUERY2}${QUERY3}"
+  clear
   echo "Logging in to mysql as root..."
   mysql -u root -p -e "$SQL"
   mysql -u mail_admin -p$PASSWD mail < $CURRDIR/templates/mail.isam.sql
@@ -297,6 +301,7 @@ generateKeys () {
 }
 
 rebootSystem () {
+  clear
   echo "Configuration is complete and the system needs to reboot."
   echo "Press any key to continue..."
   read -n 1
