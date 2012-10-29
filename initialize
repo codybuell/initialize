@@ -10,6 +10,23 @@
 # Author(s): Cody Buell
 #
 # Revisions: 2012.10.20 Initial framework.
+#            2012.10.22 Addition of confirmation after prompts.
+#                       Addition of amavisd-new, clamav and spamassassin.
+#                       Set mail.domain.com as default for mail server.
+#                       Script name change and notes.
+#            2012.10.26 Detailed notes and function consolidation.
+#            2012.10.27 Functional virtualhosts with ssl, bug fixes.
+#                       Fixes to virtualhost configurations.
+#            2012.10.28 Addition of clear commands for clarity.
+#            2012.10.29 Addition of helper functions to build out additional
+#                       vhosts and email accounts.  Added options and usage.
+#                       Moved php basedir back into php.ini to allow symlinks
+#                       between /var/www/html/ and /var/www/vhosts/.  Symlinked
+#                       /var/www/vhosts/[IP] and /var/www/vhosts/[hostname] to
+#                       /var/www/html.  Set default virtualhost containers to
+#                       use VirtualDocumentRoot directives to support browsers
+#                       without SNI support.
+#                       Added welcome email.
 #
 # Requisite: CentOS 6.3
 #            DNS Configured with FQDN
@@ -28,25 +45,53 @@
 #            <http://wiki.mediatemple.net/w/(ve):Install_Postfix_with_Dovecot_on_CentOS>
 #            <http://www.howtoforge.com/virtual-users-and-domains-with-postfix-courier-mysql-and-squirrelmail-centos-6.2-x86_64>
 #
-# Task List: - create script to generate virtualhost (conf file, doc root, hosts file, certs)
-#            - create script to manage email accounts
+# Task List: - create script to manage email accounts
 #            - utilize whiptail and add choice of what components to install
 #            - improve comments in script and templates, simplify templates
 #            - yum removes? network manager? managers?
 #            - add 'active' column in mysql users table and where clause in
 #              postfix and dovecot sql access files then test
-#            - need to be able to setup visudo without interaction...
+#            - need to be able to setup visudo without interaction, or don't
+#              configure at all?
 #            - log all output from script to new log file
-#            - create a text file or output when first logging in that gives details on how to
-#              access administrator email account
-#            - send a welcome email to administrator with server configuration info
+#            - create a text file or output when first logging in that gives
+#              details on how to access administrator email account
 #            - add some useful dotfiles?  vim git etc... history length...
 #            - add pyzor and dcc
 #            - run a check on the rpmforge package??
 #            - secure mysql without interaction?
-#            - fix the first cert you get when setting up a mail account, localhost.localdomain
-#            - see if there is a way to flush administrator email when it gets full, delete one for one received?
-#            - setup quota warning emails to administrator in 90-quota.conf dovecot config
+#            - see if there is a way to flush administrator email when it gets
+#              full, delete one for one received?
+#            - setup quota warning emails to admin, 90-quota.conf dovecot config
+#            - create wildcard certs '*.domain.com' for subdomains?
+
+#########
+# Usage #
+#########
+
+usage() {
+  cat <<-ENDOFUSAGE
+	  $(basename $0) [-h|--help] [-i|--initialize] [-V|--new-vhost] [-E|--new-email]
+
+	    -h, --help        Display usage information.
+	    -i, --initialize  Run the full initialize script.
+	    -V, --new-vhost   Provision a new Apache virtualhost.
+	    -E, --new-email   Provision a new email account.
+
+	  Examples
+
+	    Setup a web & mail server on a fresh system.
+	      $(basename $0) -i
+
+	    Add another virtualhost to the existing web server.
+	      $(basename $0) -V
+
+	    Add another email account.
+	      $(basename $0) -E
+
+	ENDOFUSAGE
+  exit
+}
 
 ####################
 # Helper Functions #
@@ -60,33 +105,31 @@ checks () {                                   # args: user path 'distros'
   LOC=`echo $0 | sed "s/${FUN}//"`            # get current location
   [ "$0" != $2/$(basename $0) ] && {          # check for correct path
     echo "error: $FUN must be run from $LOC"  # wrong path error message
-    DIE=true                                  # register errors
+    DIE=true                                  # register error
   }
 
   # check current user
   [ `whoami` != $1 ] && {                     # check for correct user
     echo "error: $FUN must be run as $1"      # wrong user error message
-    DIE=true                                  # register errors
+    DIE=true                                  # register error
   }
 
   # distro detection
-  if [ -f /etc/redhat-release ]; then
-    DIST=`head -1 /etc/redhat-release | awk '{print $1}'`
-    RELS=`head -1 /etc/redhat-release | sed -e 's/[^0-9.]//g'`
-    BITS=`uname -i`
-    PMAN='yum'
-  elif [ -f /etc/debian_version ]; then
-    DIST=`lsb_release -s -d | awk '{print $1}'`
-    RELS=`lsb_release -s -d | sed -e 's/[^0-9.]//g'`
-    BITS=`uname -m`
-    PMAN='apt-get'
+  if [ -f /etc/redhat-release ]; then                          # red hat family
+    DIST=`head -1 /etc/redhat-release | awk '{print $1}'`      # distro name
+    RELS=`head -1 /etc/redhat-release | sed -e 's/[^0-9.]//g'` # release number
+    BITS=`uname -i`                                            # 32/64 bit
+    PMAN='yum'                                                 # package manager
+  elif [ -f /etc/debian_version ]; then                        # debian family
+    DIST=`lsb_release -s -d | awk '{print $1}'`                # distro name
+    RELS=`lsb_release -s -d | sed -e 's/[^0-9.]//g'`           # release number
+    BITS=`uname -m`                                            # 32/62 bit
+    PMAN='apt-get'                                             # package manager
   fi
-  NAME="$DIST $RELS"
-  if grep -q "$NAME" <<< "$3"; then
-    NAME=
-  else
-    echo "error: $NAME is currently not supported"
-    DIE=true
+  NAME="$DIST $RELS"                                # name to check for support
+  if ! grep -q "$NAME" <<< "$3"; then               # look for name in argument
+    echo "error: $NAME is currently not supported"  # unsuported distro message
+    DIE=true                                        # register error
   fi
 
   if $DIE; then                               # if error found then...
@@ -109,6 +152,117 @@ installTemplate () {                          # args: template target [chunk]
     sed -n "/<${3}>/,/<\/${3}>/p" $TEM > $2   # replace with template chunk
     sed -i "/<${3}>/d;/<\/${3}>/d" $2         # clear out the tags
   fi
+}
+
+####################
+# Prompt Functions #
+####################
+
+promptsFull () {
+  while [ $CONFIRM == "no" ]; do
+    clear
+    prompt "What username would you like?" USERNAME
+    prompt "What is $USERNAME's uid and gid?" GUID
+    prompt "What port would you like to use for ssh?" SSHPORT
+    prompt "What is this systems short name?" HOSTNAME
+    prompt "What is this systems domain name?" DOMAIN
+    ADMIN="administrator@$DOMAIN"
+    stty -echo
+    prompt "Set a password for mysql mail_admin." PASSWD
+    echo ""
+    prompt "Set a password for administrator email." PMPWD
+    stty echo
+    echo ""
+    echo ""
+    echo " The system will be configured as follows:"
+    echo ""
+    echo "               Your Username: $USERNAME"
+    echo "        Your User & Group ID: $GUID"
+    echo "                    SSH Port: $SSHPORT"
+    echo "             Host Short Name: $HOSTNAME"
+    echo "                      Domain: $DOMAIN"
+    echo " Fully Qualified Domain Name: $HOSTNAME.$DOMAIN"
+    echo "  Server Administrator Email: $ADMIN"
+    if [ -z "$PASSWD" ]; then
+      echo "   MySQL mail_admin Password: <UNSET>"
+    else
+      echo "   MySQL mail_admin Password: *****"
+    fi
+    if [ -z "$PMPWD" ]; then
+      echo "  Postmaster E-mail Password: <UNSET>"
+    else
+      echo "  Postmaster E-mail Password: *****"
+    fi
+    echo ""
+    echo ""
+    echo "Is the above information correct?"
+    select yn in "Yes" "No"; do
+      case $yn in
+        Yes ) echo ""
+        echo "Are you sure you wish to proceed?"
+              select final in "Yes" "No"; do
+                case $final in
+                  Yes ) CONFIRM="yes"; echo ""; break;;
+                  No ) echo ""; exit 0; break;;
+                esac
+              done
+              break;;
+        No ) CONFIRM="no"; break;;
+      esac
+    done
+  done
+}
+
+promptsVhost () {
+  while [ $CONFIRM == "no" ]; do
+    prompt "Enter the domain name of the new virtualhost: " DOMAIN
+    echo ""
+    echo "A new virtualhost for $DOMAIN will now be created."
+    echo "Is this correct?"
+    select yn in "Yes" "No"; do
+      case $yn in
+        Yes ) CONFIRM="yes"; break;;
+        No ) echo "Would you like to exit this script?"
+             select final in "Yes" "No"; do
+               case $final in
+                 Yes ) echo ""; exit 0; break;;
+                 No ) CONFIRM="no"; echo ""; break;;
+               esac
+             done
+             break;;
+      esac
+    done
+  done
+}
+
+promptsEmail () {
+  while [ $CONFIRM == "no" ]; do
+    prompt "Enter the email address you wish to create: " EMAIL
+    prompt "Enter the accounts quota in MB, 0 for unlimited: " QUOTA
+    stty -echo
+    prompt "Set a password for $EMAIL" PASSWD
+    stty echo
+    echo ""
+    USER=`echo $EMAIL | sed 's/\(.*\)@\(.*\)/\1/'`
+    DOMAIN=`echo $EMAIL | sed 's/\(.*\)@\(.*\)/\2/'`
+    QUOTA=$(( $QUOTA * 1048576 ))
+    echo ""
+    echo "The email account $EMAIL will now be created."
+    echo "Is this correct?"
+    select yn in "Yes" "No"; do
+      case $yn in
+        Yes ) CONFIRM="yes"; break;;
+        No ) echo "Would you like to exit this script?"
+             select final in "Yes" "No"; do
+               case $final in
+                 Yes ) echo ""; exit 0; break;;
+                 No ) CONFIRM="no"; echo ""; break;;
+               esac
+             done
+             break;;
+      esac
+    done
+  done
 }
 
 ###########################
@@ -203,6 +357,8 @@ configurePHP () {
 configureApache () {
   mkdir /etc/httpd/vhost.d
   mkdir -p /var/www/vhosts/$DOMAIN
+  ln -s /var/www/html /var/www/vhosts/$ADDRESS
+  ln -s /var/www/html /var/www/vhosts/$HOSTNAME
   chkconfig httpd on
   installTemplate httpd.conf /etc/httpd/conf/httpd.conf
   installTemplate vhost.conf /etc/httpd/vhost.d/$DOMAIN.conf
@@ -294,6 +450,17 @@ configureMailAccounts () {
   QUERY6="INSERT INTO forwardings VALUES ('root@${DOMAIN}','administrator@${DOMAIN}');"
   SQL="${QUERY1}${QUERY2}${QUERY3}${QUERY4}${QUERY5}${QUERY6}"
   mysql -u mail_admin -p$PASSWD -e "$SQL"
+  (
+  echo "To: administrator@${DOMAIN}"
+  echo "Subject: Welcome!"
+  echo "Welcome to the administrator email account."
+  echo ""
+  echo "This account will recieve all email directed at root, webmaster and postmaster for $HOSTNAME, as well as spam alerts for all email accounts on this host."
+  echo ""
+  echo "Sincerely,"
+  echo ""
+  echo "Initialize"
+  ) | sendmail -t
 }
 
 generateKeys () {
@@ -307,6 +474,89 @@ rebootSystem () {
   read -n 1
   init 6
   exit 0
+}
+
+#################
+# Run Functions #
+#################
+
+initialize () {
+  promptsFull
+  rpmforgeEnable
+  updateSystem
+  installPackages
+  configureHostname
+  configureAccounts
+  dotfiles
+  configureSSH
+  configureFirewall
+  configureSELinux
+  configureMySQL
+  configureNTP
+  configurePHP
+  configureApache
+  configurePostfix
+  configureDovecot
+  configureClamAV
+  configureAmavis
+  configureMailAccounts
+  generateKeys
+  rebootSystem
+}
+
+new_vhost () {
+  promptsVhost
+  sed -i "s/^${ADDRESS}.*/& ${DOMAIN} www.${DOMAIN}/" /etc/hosts
+  mkdir -p /var/www/vhosts/$DOMAIN
+  installTemplate vhost.conf /etc/httpd/vhost.d/$DOMAIN.conf
+  installTemplate index.php /var/www/vhosts/$DOMAIN/index.php
+  sed -i "s/virtualdomain.com/${DOMAIN}/g" /etc/httpd/vhost.d/$DOMAIN.conf
+  sed -i "s/EXAMPLE/${DOMAIN}/g" /var/www/vhosts/$DOMAIN/index.php
+  generateKeys
+  service httpd graceful
+  echo ""
+  echo "The hosts file has been updated and the following"
+  echo "folders and files have been created:"
+  echo "  /etc/httpd/vhost.d/$DOMAIN.conf"
+  echo "  /var/www/vhosts/$DOMAIN"
+  echo "  /var/www/vhosts/$DOMAIN/index.php"
+  echo ""
+}
+
+new_email () {
+  promptsEmail
+  HOSTS=`cat /etc/hosts`
+  if ! grep -q "$DOMAIN" <<< "$HOSTS"; then
+    sed -i "s/^${ADDRESS}.*/& ${DOMAIN} www.${DOMAIN}/" /etc/hosts
+  fi
+  if [ ! -f /etc/pki/tls/certs/$DOMAIN.crt ]; then
+    generateKeys
+  fi
+  stty -echo
+  CRAMPWD=`doveadm pw -p $PASSWD`
+  stty echo
+  QUERY1="USE mail;"
+  QUERY2="INSERT IGNORE INTO domains set domain='${DOMAIN}';"
+  QUERY3="INSERT IGNORE INTO users set email='${EMAIL}',password='${CRAMPWD}',quota='${QUOTA}';"
+  SQL="${QUERY1}${QUERY2}${QUERY3}"
+  echo "Please enter your 'mail_admin' mysql password."
+  mysql -u mail_admin -p -e "$SQL"
+  (
+  echo "To: $EMAIL"
+  echo "Subject: Welcome!"
+  echo "Welcome to your new email account."
+  echo ""
+  echo "Sincerely,"
+  echo ""
+  echo "Initialize"
+  ) | sendmail -t
+  echo ""
+  echo "The email account '$EMAIL' has been created."
+  echo "  incoming server: mail.$DOMAIN"
+  echo "  outgoing server: mail.$DOMAIN"
+  echo "         username: $EMAIL"
+  echo "         password: *****"
+  echo ""
 }
 
 ##################
@@ -352,86 +602,68 @@ SSHPORT='22'                  # port to allow ssh in on
 DOMAIN='example.com'          # primary domain name
 PASSWD=''                     # mysql mail_admin password
 PMPWD=''                      # administrator email password
+QUOTA='0'                     # default quota for new email accounts
 #MAILDIR='/var/mail/vhosts'   # add as option later
 #VWEBDIR='/var/www/vhosts'    # add as option later
 #SWEBDIR='/var/www/html'      # add as option later
 #SERVICES='imap'              # add as option later (imap pop3)
 
-# prompts
-while [ $CONFIRM == "no" ]; do
-  clear
-  prompt "What username would you like?" USERNAME
-  prompt "What is $USERNAME's uid and gid?" GUID
-  prompt "What port would you like to use for ssh?" SSHPORT
-  prompt "What is this systems short name?" HOSTNAME
-  prompt "What is this systems domain name?" DOMAIN
-  ADMIN="administrator@$DOMAIN"
-  stty -echo
-  prompt "Set a password for mysql mail_admin." PASSWD
-  echo ""
-  prompt "Set a password for administrator email." PMPWD
-  stty echo
-  echo ""
-  echo ""
-  echo " The system will be configured as follows:"
-  echo ""
-  echo "               Your Username: $USERNAME"
-  echo "        Your User & Group ID: $GUID"
-  echo "                    SSH Port: $SSHPORT"
-  echo "             Host Short Name: $HOSTNAME"
-  echo "                      Domain: $DOMAIN"
-  echo " Fully Qualified Domain Name: $HOSTNAME.$DOMAIN"
-  echo "  Server Administrator Email: $ADMIN"
-  if [ -z "$PASSWD" ]; then
-    echo "   MySQL mail_admin Password: <UNSET>"
-  else
-    echo "   MySQL mail_admin Password: *****"
-  fi
-  if [ -z "$PMPWD" ]; then
-    echo "  Postmaster E-mail Password: <UNSET>"
-  else
-    echo "  Postmaster E-mail Password: *****"
-  fi
-  echo ""
-  echo ""
-  echo "Is the above information correct?"
-  select yn in "Yes" "No"; do
-    case $yn in
-      Yes ) echo ""
-      echo "Are you sure you wish to proceed?"
-            select final in "Yes" "No"; do
-              case $final in
-                Yes ) CONFIRM="yes"; echo ""; break;;
-                No ) echo ""; exit 0; break;;
-              esac
-            done
-            break;;
-      No ) CONFIRM="no"; break;;
-    esac
-  done
+################
+# Long Options #
+################
+
+[ x"$1" = x"--help" ] && {
+  usage
+  exit 0
+}
+
+[ x"$1" = x"--initialize" ] && {
+  initialize
+  exit 0
+}
+
+[ x"$1" = x"--new-vhost" ] && {
+  new_vhost
+  exit 0
+}
+
+[ x"$1" = x"--new-email" ] && {
+  new_email
+  exit 0
+}
+
+#################
+# Short Options #
+#################
+
+#while getopts ":hvcCsi:o:p:r:" Option; do
+while getopts ":hiVE" Option; do
+  case $Option in
+    h )
+      usage
+      exit 0
+      ;;
+    i )
+      initialize
+      exit 0
+      ;;
+    V )
+      new_vhost
+      exit 0
+      ;;
+    E )
+      new_email
+      exit 0
+      ;;
+    : )
+      echo "Option -$OPTARG requires an argument." >&2
+      exit 0
+      ;;
+  esac
 done
 
-##########
-# Run It #
-##########
+##############
+# No Options #
+##############
 
-rpmforgeEnable
-updateSystem
-installPackages
-configureHostname
-configureAccounts
-dotfiles
-configureSSH
-configureFirewall
-configureSELinux
-configureMySQL
-configureNTP
-configurePHP
-configureApache
-configurePostfix
-configureDovecot
-configureClamAV
-configureAmavis
-configureMailAccounts
-generateKeys
-rebootSystem
+usage

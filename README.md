@@ -37,7 +37,6 @@ The __initialize__ script will eventually do the following:
  - Support other versions of CentOS and other ditributions of Linux.
  - Setup Pyzor and DCC with Spamassassin.
  - Allow selection of which components to configure/install.
- - Have an option to provision email accounts and virtualhosts.
 
 Prerequisites & Assumptions
 ---------------------------
@@ -69,11 +68,12 @@ You have a couple of options:
 
 Once you have the initalize script and templates, place them both on your server in the same path then execute.  The script must be run as root and from the directory in which it is located.
 
-    ./initialize
+    ./initialize [-h|--help] [-i|--initialize] [-V|--new-vhost] [-E|--new-email]
 
-### Helper Scripts
-
-Currently they don't exist!  But the plan is to create helper scripts to help manage email accounts and setup new virtual domains.  Though if you are using this script, chances are you already know how to do those things.
+          -h, --help        Display usage information.
+          -i, --initialize  Run the full initialize script.
+          -V, --new-vhost   Provision a new Apache virtualhost.
+          -E, --new-email   Provision a new email account.
 
 What It Does
 ------------
@@ -84,7 +84,9 @@ Any file that is modified by the script is first backed up by creating a copy wi
 
 ### Installed Packages
 
-    man wget vim telnet crypto-utils mod_ssl tree bind-utils ntp httpd mysql-server php php-mysql postfix dovecot dovecot-mysql mailx sudo git ruby rubygems setroubleshoot amavisd-new clamav clamav-devel clamd spamassassin
+    man wget vim telnet crypto-utils mod_ssl tree bind-utils ntp httpd
+    mysql-server php php-mysql postfix dovecot dovecot-mysql mailx sudo git ruby
+    rubygems setroubleshoot amavisd-new clamav clamav-devel clamd spamassassin
 
 This list does not include installed dependencies.
 
@@ -270,9 +272,9 @@ Testing
         Trying ::1...
         Connected to localhost.
         Escape character is '^]'.
-        220 mail.example.com ESMTP Postfix
+        220 mail.yourdomain.com ESMTP Postfix
         ehlo localhost
-        250-mail.example.com
+        250-mail.yourdomain.com
         250-PIPELINING
         250-SIZE 10240000
         250-VRFY
@@ -341,9 +343,9 @@ Testing
         Trying 127.0.0.1...
         Connected to localhost.
         Escape character is '^]'.
-        220 beta.example.com ESMTP Postfix
+        220 beta.yourdomain.com ESMTP Postfix
         ehlo localhost
-        250-beta.example.com
+        250-beta.yourdomain.com
         250-PIPELINING
         250-SIZE 10240000
         250-VRFY
@@ -358,15 +360,15 @@ Testing
 
  9. Send some spammy emails to test Amavis:
 
-      cd /usr/share/doc/amavisd-new-2.6.6/test-messages/
-      perl -pe 's/./chr(ord($&)^255)/sge' <sample.tar.gz.compl | zcat | tar xvf -
-      sendmail -i administrator@example.com < sample-virus-simple.txt
-      sendmail -i administrator@example.com < sample-spam-GTUBE-junk.txt
-      sendmail -i administrator@example.com < [DO A LISTING TO SEE FIND MORE]
+        cd /usr/share/doc/amavisd-new-2.6.6/test-messages/
+        perl -pe 's/./chr(ord($&)^255)/sge' <sample.tar.gz.compl | zcat | tar xvf -
+        sendmail -i administrator@yourdomain.com < sample-virus-simple.txt
+        sendmail -i administrator@yourdomain.com < sample-spam-GTUBE-junk.txt
+        sendmail -i administrator@yourdomain.com < [DO A LISTING TO SEE FIND MORE]
 
  10. Send an email:
 
-      mailx administrator@example.com
+      mailx administrator@yourdomain.com
 
     You will be prompted for a subject, then enter the body text.  To finish and
     send create a new line, put in a period and hit enter.
