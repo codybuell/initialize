@@ -564,7 +564,7 @@ new_email () {
 ##################
 
 # check user and run path
-checks root . 'CentOS 6.3'
+checks root . 'CentOS 6.3 CentOS 6.4'
 
 # potential solution for distro specific runs...
 # if [ $DIST == 'CentOS' ]; then
