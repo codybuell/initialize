@@ -4,7 +4,7 @@
   <title>EXAMPLE</title>
   <style type=text/css>
     div {
-      width: 100%;
+      width: 99%;
       position: absolute;
       top: 48%;
       text-align: center;
