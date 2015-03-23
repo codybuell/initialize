@@ -1,6 +1,9 @@
 Initialize
 ==========
 
+![Version](https://img.shields.io/badge/version-1.0-green.svg)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](http://opensource.org/licenses/MIT)
+
 Configuration script for linux systems to setup a web and mail server hosting multiple domains.  The script is currently built specifically for CentOS 6.3, though it could easily be, and eventually will be, adapted for other linux distributions and versions.  The goal is a lightweight, fast and secure server configured in minutes.
 
 Overview
@@ -372,6 +375,11 @@ Testing
 
     You will be prompted for a subject, then enter the body text.  To finish and
     send create a new line, put in a period and hit enter.
+
+License
+-------
+
+Initialize is open-sourced software licensed under the [MIT license](http://opensource.org/licenses/MIT).
 
 Resources
 ---------
